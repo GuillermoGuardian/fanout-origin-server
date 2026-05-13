@@ -209,7 +209,22 @@ function simulateMatch(matchId) {
       matchId, homeScore: match.homeTeam.score, awayScore: match.awayTeam.score,
       homeTeam: match.homeTeam.name, awayTeam: match.awayTeam.name,
     });
-    console.log(`🏁 Fin ${matchId}`);
+    console.log(`🏁 Fin ${matchId} — reiniciando en 10s`);
+
+    // Reiniciar partido automáticamente después de 10 segundos
+    setTimeout(() => {
+      match.homeTeam.score = 0;
+      match.awayTeam.score = 0;
+      match.minute = 0;
+      match.status = "live";
+      match.events = [];
+      console.log(`🔄 Partido ${matchId} reiniciado`);
+      publishMatchUpdate(matchId, "reset", {
+        matchId,
+        homeScore: 0, awayScore: 0,
+        homeTeam: match.homeTeam.name, awayTeam: match.awayTeam.name,
+      });
+    }, 10000);
   }
 }
 
