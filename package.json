@@ -1,15 +1,17 @@
 {
-  "name": "fanout-origin-server",
+  "name": "futbol-fanout-origin",
   "version": "1.0.0",
+  "description": "Origin server para demo de marcadores con Fastly Fanout",
   "type": "module",
+  "main": "server.js",
   "scripts": {
-    "start": "node server.js"
-  },
-  "engines": {
-    "node": ">=18"
+    "start": "node server.js",
+    "dev":   "NODE_ENV=development node server.js"
   },
   "dependencies": {
-    "cors": "^2.8.5",
-    "express": "^4.18.2"
-  }
+    "cors":                 "^2.8.5",
+    "express":              "^4.18.2",
+    "@fanoutio/serve-grip": "^2.0.0"
+  },
+  "engines": { "node": ">=18" }
 }

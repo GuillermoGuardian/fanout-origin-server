@@ -1,153 +1,93 @@
 /**
  * Origin Server - Marcadores de Fútbol en Tiempo Real
- * 
- * Este servidor:
- * 1. Sirve el frontend estático
- * 2. Expone API REST de partidos
- * 3. Simula actualizaciones de marcadores
- * 4. Publica al canal Fanout de Fastly → llega a TODOS los clientes suscritos
- * 
- * En producción: POST a https://api.fastly.com/service/{SERVICE_ID}/publish/
- * En local:      POST a http://localhost:5561/publish/ (Pushpin local)
+ *
+ * Usa @fanoutio/serve-grip como middleware de Express para manejar GRIP.
+ * El middleware detecta si la request viene de Fanout y provee res.grip
+ * para emitir instrucciones GRIP (hold stream, suscribir canales).
+ *
+ * Patrón del leaderboard demo oficial de Fastly:
+ * https://github.com/fastly/fanout-leaderboard-demo
  */
 
 import express from "express";
 import cors from "cors";
-import { readFileSync } from "fs";
-import { join, dirname } from "path";
-import { fileURLToPath } from "url";
+import { ServeGrip } from "@fanoutio/serve-grip";
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
 const app = express();
 app.use(cors());
 app.use(express.json());
-app.use(express.static(join(__dirname, "../frontend")));
 
-// ── Configuración Fanout ─────────────────────────────────────────────────────
-const FASTLY_SERVICE_ID = process.env.FASTLY_SERVICE_ID || "YOUR_SERVICE_ID";
-const FASTLY_API_TOKEN  = process.env.FASTLY_API_TOKEN  || "YOUR_API_TOKEN";
+// ── Configuración GRIP / Fanout ──────────────────────────────────────────────
+const FASTLY_SERVICE_ID = process.env.FASTLY_SERVICE_ID || "";
+const FASTLY_API_TOKEN  = process.env.FASTLY_API_TOKEN  || "";
 const IS_LOCAL          = process.env.NODE_ENV !== "production";
 
-// En local usamos el endpoint Pushpin; en prod, el de Fastly
-const FANOUT_PUBLISH_URL = IS_LOCAL
-  ? "http://localhost:5561/publish/"
-  : `https://api.fastly.com/service/${FASTLY_SERVICE_ID}/publish/`;
+// GRIP_URL:
+// - Local (Pushpin): http://localhost:5561/
+// - Producción (Fastly): https://api.fastly.com/service/{id}/publish/ con token
+const GRIP_URL = IS_LOCAL
+  ? "http://localhost:5561/"
+  : `fastly+api://api.fastly.com/service/${FASTLY_SERVICE_ID}?verify-iss=fastly:${FASTLY_SERVICE_ID}&key=${FASTLY_API_TOKEN}`;
 
-// ── Estado de los partidos ───────────────────────────────────────────────────
+const serveGrip = new ServeGrip({ grip: GRIP_URL });
+app.use(serveGrip);
+
+// ── Estado de partidos ───────────────────────────────────────────────────────
 const matches = {
   "match-001": {
     id: "match-001",
-    homeTeam: { name: "Real Madrid",    flag: "🇪🇸", logo: "⚽", score: 0 },
-    awayTeam: { name: "Bayern Múnich",  flag: "🇩🇪", logo: "⚽", score: 0 },
-    status: "live",
-    minute: 0,
+    homeTeam: { name: "Real Madrid",     flag: "🇪🇸", score: 0 },
+    awayTeam: { name: "Bayern Múnich",   flag: "🇩🇪", score: 0 },
+    status: "live", minute: 0,
     competition: "UEFA Champions League",
-    venue: "Santiago Bernabéu",
-    events: [],
+    venue: "Santiago Bernabéu", events: [],
   },
   "match-002": {
     id: "match-002",
-    homeTeam: { name: "Barcelona",      flag: "🇪🇸", logo: "⚽", score: 0 },
-    awayTeam: { name: "PSG",            flag: "🇫🇷", logo: "⚽", score: 0 },
-    status: "live",
-    minute: 0,
+    homeTeam: { name: "Barcelona",       flag: "🇪🇸", score: 0 },
+    awayTeam: { name: "PSG",             flag: "🇫🇷", score: 0 },
+    status: "live", minute: 0,
     competition: "UEFA Champions League",
-    venue: "Spotify Camp Nou",
-    events: [],
+    venue: "Spotify Camp Nou", events: [],
   },
   "match-003": {
     id: "match-003",
-    homeTeam: { name: "Manchester City", flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿", logo: "⚽", score: 0 },
-    awayTeam: { name: "Inter Miami",     flag: "🇺🇸", logo: "⚽", score: 0 },
-    status: "live",
-    minute: 0,
+    homeTeam: { name: "Manchester City", flag: "🏴󠁧󠁢󠁥󠁮󠁧󠁿", score: 0 },
+    awayTeam: { name: "Inter Miami",     flag: "🇺🇸", score: 0 },
+    status: "live", minute: 0,
     competition: "Club World Cup",
-    venue: "MetLife Stadium",
-    events: [],
+    venue: "MetLife Stadium", events: [],
   },
   "match-004": {
     id: "match-004",
-    homeTeam: { name: "América",         flag: "🇲🇽", logo: "⚽", score: 0 },
-    awayTeam: { name: "Chivas",          flag: "🇲🇽", logo: "⚽", score: 0 },
-    status: "live",
-    minute: 0,
+    homeTeam: { name: "América",         flag: "🇲🇽", score: 0 },
+    awayTeam: { name: "Chivas",          flag: "🇲🇽", score: 0 },
+    status: "live", minute: 0,
     competition: "Liga MX",
-    venue: "Estadio Azteca",
-    events: [],
+    venue: "Estadio Azteca", events: [],
   },
 };
 
 const players = {
-  "match-001": {
-    home: ["Vinícius Jr.", "Mbappé", "Bellingham", "Rodrygo"],
-    away: ["Kane",  "Müller", "Sané", "Goretzka"],
-  },
-  "match-002": {
-    home: ["Lewandowski", "Yamal", "Pedri", "Gavi"],
-    away: ["Dembélé", "Neymar", "Mbappé", "Verratti"],
-  },
-  "match-003": {
-    home: ["Haaland", "De Bruyne", "Foden", "Silva"],
-    away: ["Messi",   "Suárez",    "Alba",   "Busquets"],
-  },
-  "match-004": {
-    home: ["Álvarez", "Valdés",   "Fidalgo", "Zendejas"],
-    away: ["Chicharito", "Vega",  "Antuna",  "Pizarro"],
-  },
+  "match-001": { home: ["Vinícius Jr.", "Mbappé", "Bellingham", "Rodrygo"],    away: ["Kane",       "Müller",  "Sané",    "Goretzka"] },
+  "match-002": { home: ["Lewandowski",  "Yamal",  "Pedri",      "Gavi"],       away: ["Dembélé",    "Neymar",  "Mbappé",  "Verratti"] },
+  "match-003": { home: ["Haaland",      "De Bruyne", "Foden",   "Silva"],      away: ["Messi",      "Suárez",  "Alba",    "Busquets"] },
+  "match-004": { home: ["Álvarez",      "Valdés",    "Fidalgo", "Zendejas"],   away: ["Chicharito", "Vega",    "Antuna",  "Pizarro"]  },
 };
 
-// ── Utilidades Fanout ────────────────────────────────────────────────────────
-
-/**
- * Publica un evento SSE a un canal Fanout.
- * Todos los clientes suscritos a ese canal reciben el mensaje
- * instantáneamente, sin importar cuántos sean ni en qué POP de Fastly estén.
- */
+// ── Publicar via serve-grip ──────────────────────────────────────────────────
 async function publishToChannel(channel, eventType, data) {
-  const ssePayload = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
-
-  const gripBody = {
-    items: [
-      {
-        channel,
-        formats: {
-          "http-stream": {
-            // Contenido SSE que se entrega a cada cliente suscrito
-            content: ssePayload,
-          },
-        },
-      },
-    ],
-  };
-
-  const headers = { "Content-Type": "application/json" };
-  if (!IS_LOCAL) {
-    headers["Authorization"] = `Bearer ${FASTLY_API_TOKEN}`;
-  }
+  const publisher = serveGrip.getPublisher();
+  const sseContent = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
 
   try {
-    const res = await fetch(FANOUT_PUBLISH_URL, {
-      method: "POST",
-      headers,
-      body: JSON.stringify(gripBody),
-    });
-
-    if (!res.ok) {
-      const text = await res.text();
-      console.error(`[Fanout] Publish failed ${res.status}: ${text}`);
-    } else {
-      console.log(`[Fanout] ✅ Published "${eventType}" → channel "${channel}"`);
-    }
+    await publisher.publishHttpStream(channel, sseContent);
+    console.log(`[Fanout] ✅ "${eventType}" → "${channel}"`);
   } catch (err) {
-    console.error(`[Fanout] Publish error:`, err.message);
+    console.error(`[Fanout] Error publicando:`, err.message);
   }
 }
 
-/**
- * Publica el mismo evento a TODOS los canales relevantes:
- * - Canal del partido específico
- * - Canal "live-scores" global (dashboard general)
- */
 async function publishMatchUpdate(matchId, eventType, data) {
   await Promise.all([
     publishToChannel(`match-${matchId}`, eventType, data),
@@ -156,64 +96,68 @@ async function publishMatchUpdate(matchId, eventType, data) {
 }
 
 // ── API REST ─────────────────────────────────────────────────────────────────
-
-// Lista de partidos
-app.get("/api/matches", (req, res) => {
+app.get("/", (req, res) => {
   res.json({
-    matches: Object.values(matches),
-    publishEndpoint: IS_LOCAL
-      ? "Pushpin local (localhost:5561)"
-      : "Fastly Fanout API",
-    totalSubscribers: "Ver en Fastly Dashboard",
+    service: "Futbol Fanout Origin",
+    status:  "running",
+    grip:    IS_LOCAL ? "Pushpin local" : "Fastly API",
+    matches: Object.keys(matches).length,
   });
 });
 
-// Estado de un partido
+app.get("/api/matches", (req, res) => {
+  res.json({ matches: Object.values(matches) });
+});
+
 app.get("/api/matches/:matchId", (req, res) => {
   const match = matches[req.params.matchId];
-  if (!match) return res.status(404).json({ error: "Match not found" });
+  if (!match) return res.status(404).json({ error: "Not found" });
   res.json(match);
 });
 
-// ── SSE Handler local (para desarrollo sin Fastly) ───────────────────────────
-// En producción, el edge Compute maneja esto con Fanout/GRIP
-app.get("/stream/match/:matchId", (req, res) => {
-  const match = matches[req.params.matchId];
-  if (!match) return res.status(404).send("Match not found");
+// ── SSE endpoints con GRIP ───────────────────────────────────────────────────
+// serve-grip detecta si la request vino de Fanout (req.grip.isProxied)
+// y provee res.grip para emitir instrucciones GRIP
 
-  res.setHeader("Content-Type",  "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection",    "keep-alive");
-  res.setHeader("X-Accel-Buffering", "no");
+app.get("/stream/live", async (req, res) => {
+  if (req.grip.isProxied) {
+    // La request viene de Fanout — suscribir al canal y mantener abierto
+    const gripInstruct = res.grip.startInstruct();
+    gripInstruct.addChannel("live-scores");
+    gripInstruct.setHoldStream();
 
-  // Enviar estado inicial
-  res.write(`event: init\ndata: ${JSON.stringify(match)}\n\n`);
-
-  console.log(`[SSE] Client connected to match ${req.params.matchId}`);
-
-  req.on("close", () => {
-    console.log(`[SSE] Client disconnected from match ${req.params.matchId}`);
-  });
+    // Enviar estado inicial como evento SSE
+    res.setHeader("Content-Type", "text/event-stream");
+    const allMatches = Object.values(matches);
+    res.end(`event: init\ndata: ${JSON.stringify(allMatches)}\n\n`);
+  } else {
+    // Request directa (no viene de Fanout) — respuesta simple
+    res.status(200).json({ message: "Use Fastly Fanout to access this stream" });
+  }
 });
 
-app.get("/stream/live", (req, res) => {
-  res.setHeader("Content-Type",  "text/event-stream");
-  res.setHeader("Cache-Control", "no-cache");
-  res.setHeader("Connection",    "keep-alive");
-  res.setHeader("X-Accel-Buffering", "no");
+app.get("/stream/match/:matchId", async (req, res) => {
+  const match = matches[req.params.matchId];
+  if (!match) return res.status(404).json({ error: "Match not found" });
 
-  const allMatches = Object.values(matches);
-  res.write(`event: init\ndata: ${JSON.stringify(allMatches)}\n\n`);
+  const channel = `match-${req.params.matchId}`;
 
-  console.log("[SSE] Client connected to live scores");
-  req.on("close", () => console.log("[SSE] Client disconnected from live scores"));
+  if (req.grip.isProxied) {
+    const gripInstruct = res.grip.startInstruct();
+    gripInstruct.addChannel(channel);
+    gripInstruct.setHoldStream();
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.end(`event: init\ndata: ${JSON.stringify(match)}\n\n`);
+  } else {
+    res.status(200).json({ message: "Use Fastly Fanout to access this stream" });
+  }
 });
 
 // ── Simulador de partidos ────────────────────────────────────────────────────
-
 function getRandomPlayer(matchId, team) {
-  const teamPlayers = players[matchId]?.[team] ?? ["Jugador desconocido"];
-  return teamPlayers[Math.floor(Math.random() * teamPlayers.length)];
+  const list = players[matchId]?.[team] ?? ["Jugador"];
+  return list[Math.floor(Math.random() * list.length)];
 }
 
 function simulateMatch(matchId) {
@@ -222,127 +166,83 @@ function simulateMatch(matchId) {
 
   match.minute += 1;
 
-  // Actualización de minuto
   if (match.minute % 5 === 0) {
     publishMatchUpdate(matchId, "clock", {
-      matchId,
-      minute: match.minute,
+      matchId, minute: match.minute,
       homeScore: match.homeTeam.score,
       awayScore: match.awayTeam.score,
     });
   }
 
-  // Eventos aleatorios
   const roll = Math.random();
 
   if (roll < 0.06) {
-    // ⚽ GOL
-    const scoringTeam = Math.random() < 0.5 ? "homeTeam" : "awayTeam";
-    const scorer = getRandomPlayer(matchId, scoringTeam === "homeTeam" ? "home" : "away");
-    match[scoringTeam].score += 1;
-
+    const side   = Math.random() < 0.5 ? "homeTeam" : "awayTeam";
+    const scorer = getRandomPlayer(matchId, side === "homeTeam" ? "home" : "away");
+    match[side].score += 1;
     const event = {
-      type: "goal",
-      matchId,
-      minute: match.minute,
-      team: match[scoringTeam].name,
-      player: scorer,
-      homeScore: match.homeTeam.score,
-      awayScore: match.awayTeam.score,
-      homeTeam: match.homeTeam.name,
-      awayTeam: match.awayTeam.name,
+      type: "goal", matchId, minute: match.minute,
+      team: match[side].name, player: scorer,
+      homeScore: match.homeTeam.score, awayScore: match.awayTeam.score,
+      homeTeam: match.homeTeam.name,  awayTeam:  match.awayTeam.name,
     };
     match.events.push(event);
-    console.log(`⚽ GOL! ${scorer} (${match[scoringTeam].name}) min ${match.minute}`);
+    console.log(`⚽ GOL! ${scorer} (${match[side].name}) min ${match.minute}`);
     publishMatchUpdate(matchId, "goal", event);
 
   } else if (roll < 0.10) {
-    // 🟡 Tarjeta
-    const cardTeam   = Math.random() < 0.5 ? "home" : "away";
-    const cardPlayer = getRandomPlayer(matchId, cardTeam);
-    const cardType   = Math.random() < 0.85 ? "yellow" : "red";
-
+    const side     = Math.random() < 0.5 ? "home" : "away";
+    const player   = getRandomPlayer(matchId, side);
+    const cardType = Math.random() < 0.85 ? "yellow" : "red";
     const event = {
-      type: "card",
-      matchId,
-      minute: match.minute,
-      cardType,
-      player: cardPlayer,
-      team: cardTeam === "home" ? match.homeTeam.name : match.awayTeam.name,
+      type: "card", matchId, minute: match.minute, cardType, player,
+      team: side === "home" ? match.homeTeam.name : match.awayTeam.name,
     };
     match.events.push(event);
-    console.log(`${cardType === "yellow" ? "🟡" : "🔴"} Tarjeta ${cardType} a ${cardPlayer}`);
     publishMatchUpdate(matchId, "card", event);
 
   } else if (roll < 0.14) {
-    // 🔄 Sustitución
-    const subTeam = Math.random() < 0.5 ? "home" : "away";
-    const playerOut = getRandomPlayer(matchId, subTeam);
-    const playerIn  = `Reserva #${Math.floor(Math.random() * 9) + 12}`;
-
+    const side  = Math.random() < 0.5 ? "home" : "away";
     const event = {
-      type: "substitution",
-      matchId,
-      minute: match.minute,
-      playerOut,
-      playerIn,
-      team: subTeam === "home" ? match.homeTeam.name : match.awayTeam.name,
+      type: "substitution", matchId, minute: match.minute,
+      playerOut: getRandomPlayer(matchId, side),
+      playerIn:  `Reserva #${Math.floor(Math.random() * 9) + 12}`,
+      team: side === "home" ? match.homeTeam.name : match.awayTeam.name,
     };
     match.events.push(event);
-    console.log(`🔄 Sustitución: ${playerOut} → ${playerIn}`);
     publishMatchUpdate(matchId, "substitution", event);
   }
 
-  // Medio tiempo
   if (match.minute === 45) {
     publishMatchUpdate(matchId, "halftime", {
-      matchId,
-      homeScore: match.homeTeam.score,
-      awayScore: match.awayTeam.score,
-      homeTeam: match.homeTeam.name,
-      awayTeam: match.awayTeam.name,
+      matchId, homeScore: match.homeTeam.score, awayScore: match.awayTeam.score,
+      homeTeam: match.homeTeam.name, awayTeam: match.awayTeam.name,
     });
   }
 
-  // Final del partido
   if (match.minute >= 90) {
     match.status = "finished";
     publishMatchUpdate(matchId, "fulltime", {
-      matchId,
-      homeScore: match.homeTeam.score,
-      awayScore: match.awayTeam.score,
-      homeTeam: match.homeTeam.name,
-      awayTeam: match.awayTeam.name,
+      matchId, homeScore: match.homeTeam.score, awayScore: match.awayTeam.score,
+      homeTeam: match.homeTeam.name, awayTeam: match.awayTeam.name,
     });
     console.log(`🏁 Fin del partido ${matchId}`);
   }
 }
 
-// ── Arrancar simulación ──────────────────────────────────────────────────────
-
 function startSimulation() {
-  const matchIds = Object.keys(matches);
-
-  // Cada partido avanza a su propio ritmo (cada ~3-8 segundos demo = 1 minuto)
-  matchIds.forEach((matchId, idx) => {
-    const intervalMs = 3500 + idx * 800; // stagger entre partidos
-    setInterval(() => simulateMatch(matchId), intervalMs);
-    console.log(`⏱  Match ${matchId} simulando cada ${intervalMs}ms`);
+  Object.keys(matches).forEach((matchId, idx) => {
+    const ms = 3500 + idx * 800;
+    setInterval(() => simulateMatch(matchId), ms);
+    console.log(`⏱  ${matchId} simulando cada ${ms}ms`);
   });
 }
 
-// ── Server ───────────────────────────────────────────────────────────────────
+// ── Start ────────────────────────────────────────────────────────────────────
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`\n🚀 Origin server corriendo en http://localhost:${PORT}`);
-  console.log(`📡 Fanout publish endpoint: ${FANOUT_PUBLISH_URL}`);
-  console.log(`🌐 Modo: ${IS_LOCAL ? "LOCAL (Pushpin)" : "PRODUCCIÓN (Fastly API)"}`);
-  console.log(`\nEndpoints:`);
-  console.log(`  GET  /api/matches           → Lista de partidos`);
-  console.log(`  GET  /api/matches/:id       → Partido específico`);
-  console.log(`  GET  /stream/live           → SSE todos los partidos`);
-  console.log(`  GET  /stream/match/:id      → SSE partido específico`);
-  console.log(`\n⚽ Iniciando simulación de partidos...\n`);
+  console.log(`\n🚀 Origin corriendo en http://localhost:${PORT}`);
+  console.log(`📡 GRIP URL: ${GRIP_URL}`);
+  console.log(`🌐 Modo: ${IS_LOCAL ? "LOCAL (Pushpin)" : "PRODUCCIÓN (Fastly API)"}\n`);
   startSimulation();
 });
-
